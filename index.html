@@ -61,10 +61,7 @@
     background: #3a1714; border: 1px solid #6b2a22; color: #ffd9d2; font-size: 14px; }
   #error.on { display: block; }
 
-  details { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 14px; }
-  summary { cursor: pointer; color: var(--muted); font-size: 14px; }
-  details ol { padding-left: 20px; color: var(--muted); font-size: 14px; }
-  details code { background: var(--bg); padding: 1px 5px; border-radius: 5px; }
+  .hint code { background: var(--bg); padding: 1px 5px; border-radius: 5px; }
   .keys { margin-top: 18px; font-size: 13px; color: var(--muted); }
   kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px;
     font: 12px ui-monospace, monospace; }
@@ -163,18 +160,6 @@
     <button class="go" id="go" type="submit">Start slideshow</button>
     <div id="error" role="alert"></div>
 
-    <details id="apiBox">
-      <summary>Reddit API key (if loading fails)</summary>
-      <p class="hint">Reddit sometimes blocks requests from browsers that aren't logged in. A free app ID gets around that:</p>
-      <ol>
-        <li>Open <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> and click <em>create another app</em>.</li>
-        <li>Pick <strong>installed app</strong>. Enter any name, and use <code>http://localhost</code> as the redirect URI.</li>
-        <li>Paste the ID shown under the app name below.</li>
-      </ol>
-      <input id="clientId" type="text" placeholder="Client ID (e.g. a1B2c3D4e5F6g7)" spellcheck="false">
-      <div class="hint">Saved only in this browser. An installed-app ID isn't a secret.</div>
-    </details>
-
     <div class="keys">
       <kbd>←</kbd> <kbd>→</kbd> navigate · <kbd>Space</kbd> play/pause · <kbd>F</kbd> fullscreen · <kbd>Esc</kbd> exit · swipe on touch
     </div>
@@ -223,11 +208,8 @@ const $ = (id) => document.getElementById(id);
 const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>';
 const PRELOAD_AHEAD = 3;
-
-const store = {
-  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
-  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
-};
+// Your Cloudflare Worker URL (see worker.js and the README). Leave empty to use only direct requests.
+const PROXY_URL = '';
 
 const S = {
   opts: null, items: [], seenPosts: new Set(), i: 0, dir: 1,
@@ -256,65 +238,116 @@ function listingPath(o) {
   return { path: `/r/${o.sub}/${sort}`, qs };
 }
 
-async function getToken(clientId) {
-  try {
-    const c = JSON.parse(sessionStorage.getItem('rs_token') || 'null');
-    if (c && c.id === clientId && c.exp > Date.now() + 60000) return c.token;
-  } catch {}
-  const res = await fetch('https://www.reddit.com/api/v1/access_token', {
-    method: 'POST',
-    headers: { Authorization: 'Basic ' + btoa(clientId + ':') },
-    body: new URLSearchParams({
-      grant_type: 'https://oauth.reddit.com/grants/installed_client',
-      device_id: 'DO_NOT_TRACK_THIS_DEVICE',
-    }),
-  }).catch(() => null);
-  const data = res && res.ok ? await res.json().catch(() => null) : null;
-  if (!data || !data.access_token) {
-    throw new FriendlyError('Reddit rejected that client ID. Check that the app type is “installed app” and the ID is copied exactly.');
-  }
-  try {
-    sessionStorage.setItem('rs_token', JSON.stringify({ id: clientId, token: data.access_token, exp: Date.now() + data.expires_in * 1000 }));
-  } catch {}
-  return data.access_token;
-}
+const viaProxy = (url) => `${PROXY_URL}?url=${encodeURIComponent(url)}`;
+
+// Each source returns { posts: [reddit post data], after }. A plain Error means "blocked, try the next source";
+// a FriendlyError is a real answer (subreddit missing, rate-limited) and is shown to the user.
+const SOURCES = {
+  // 1. Reddit's JSON straight from the browser. Works for some visitors and networks; often blocked.
+  direct: (o) => fetchJson(`https://www.reddit.com${listingPath(o).path}.json?${listingPath(o).qs}`, o),
+  // 2. The same JSON through the proxy.
+  proxyJson: (o) => fetchJson(viaProxy(`https://www.reddit.com${listingPath(o).path}.json?${listingPath(o).qs}`), o),
+  // 3. The RSS feed through the proxy (Reddit rarely blocks RSS), with media details from Arctic Shift.
+  proxyRss: (o) => fetchRss(o),
+};
 
 async function fetchListing(o) {
-  const { path, qs } = listingPath(o);
-  let res;
-  if (o.clientId) {
-    const token = await getToken(o.clientId);
-    res = await fetch(`https://oauth.reddit.com${path}?${qs}`, { headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
-  } else {
-    res = await fetch(`https://www.reddit.com${path}.json?${qs}`).catch(() => null);
-  }
-  if (!res) {
-    if (!o.clientId) {
-      $('apiBox').open = true;
-      throw new FriendlyError('Reddit blocked this request, which often happens to browsers that aren\'t logged in. Add a free client ID under “Reddit API key” below and try again.');
+  const order = PROXY_URL ? ['direct', 'proxyJson', 'proxyRss'] : ['direct'];
+  // Once a source works, keep using it for later pages.
+  for (const name of order.slice(Math.max(0, order.indexOf(S.source)))) {
+    try {
+      const page = await SOURCES[name](o);
+      S.source = name;
+      return page;
+    } catch (e) {
+      if (e instanceof FriendlyError) throw e;
+      console.warn(`[slideshow] ${name} failed:`, e.message);
     }
-    throw new FriendlyError('Couldn\'t reach Reddit. Check your connection and try again.');
   }
+  throw new FriendlyError(PROXY_URL
+    ? 'Reddit blocked every way this page tried to load the feed. Wait a minute and try again.'
+    : 'Reddit blocked this request. This site needs its free proxy set up first; see “Proxy setup” in the README.');
+}
+
+function checkStatus(res, o) {
   if (res.status === 404) throw new FriendlyError(`r/${o.sub} doesn't exist or has been banned.`);
-  if (res.status === 403) throw new FriendlyError(`r/${o.sub} is private or quarantined.`);
   if (res.status === 429) throw new FriendlyError('Reddit is rate-limiting requests. Wait a minute and try again.');
-  if (!res.ok) throw new FriendlyError(`Reddit returned an error (${res.status}).`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+async function fetchJson(url, o) {
+  const res = await fetch(url).catch(() => { throw new Error('network/CORS'); });
+  checkStatus(res, o);
   const json = await res.json().catch(() => null);
-  if (!json || json.kind !== 'Listing') throw new FriendlyError(`r/${o.sub} doesn't seem to exist.`);
-  return json.data;
+  if (!json || json.kind !== 'Listing') throw new Error('not a listing');
+  return { posts: json.data.children.filter((c) => c.kind === 't3').map((c) => c.data), after: json.data.after };
+}
+
+async function fetchRss(o) {
+  const { path, qs } = listingPath(o);
+  const res = await fetch(viaProxy(`https://www.reddit.com${path}.rss?${qs}`)).catch(() => { throw new Error('proxy unreachable'); });
+  checkStatus(res, o);
+  const xml = new DOMParser().parseFromString(await res.text(), 'application/xml');
+  if (!xml.querySelector('feed')) throw new FriendlyError(`r/${o.sub} doesn't seem to exist.`);
+  const posts = [...xml.getElementsByTagName('entry')].map(parseRssEntry);
+  await enrich(posts);
+  return { posts, after: posts.length ? posts[posts.length - 1].name : null };
+}
+
+function parseRssEntry(e) {
+  const tag = (t) => e.getElementsByTagName(t)[0];
+  const name = tag('id').textContent;
+  const content = new DOMParser().parseFromString(tag('content') ? tag('content').textContent : '', 'text/html');
+  const link = [...content.querySelectorAll('a')].find((a) => a.textContent.trim() === '[link]');
+  const href = tag('link') && tag('link').getAttribute('href');
+  return {
+    name,
+    id: name.replace(/^t3_/, ''),
+    title: tag('title').textContent,
+    author: (tag('name') ? tag('name').textContent : '').replace(/^\/u\//, ''),
+    subreddit: tag('category') ? tag('category').getAttribute('term') : S.opts.sub,
+    permalink: href ? new URL(href).pathname : '',
+    url: link ? link.getAttribute('href') : '',
+    fromRss: true,
+  };
+}
+
+// RSS has no gallery, video or NSFW details, so look the posts up in the Arctic Shift archive
+// (arctic-shift.photon-reddit.com), which mirrors Reddit's full post data and allows browser requests.
+async function enrich(posts) {
+  S.archiveOk = false;
+  for (let k = 0; k < posts.length; k += 100) {
+    const chunk = posts.slice(k, k + 100);
+    let data = null;
+    for (let attempt = 0; attempt < 2 && !data; attempt++) {
+      if (attempt) await new Promise((r) => setTimeout(r, 1500));
+      const res = await fetch(`https://arctic-shift.photon-reddit.com/api/posts/ids?ids=${chunk.map((p) => p.id).join(',')}`).catch(() => null);
+      const json = res && res.ok ? await res.json().catch(() => null) : null;
+      data = json && json.data;
+    }
+    if (!data) continue;
+    S.archiveOk = true;
+    const byId = new Map(data.map((d) => [d.id, d]));
+    for (const p of chunk) {
+      const full = byId.get(p.id);
+      if (full) Object.assign(p, { ...full, title: p.title, permalink: p.permalink || full.permalink, fromRss: false });
+    }
+  }
 }
 
 /* ================= Media extraction ================= */
 
-function extractMedia(post, o) {
-  const d = post.data;
+function extractMedia(d, o) {
   if (d.stickied || (d.over_18 && !o.nsfw)) return [];
+  // RSS-only posts (not in the archive yet) carry no NSFW flag; skip them unless NSFW is allowed
+  // or the archive was unreachable altogether (otherwise the slideshow would be empty).
+  if (d.fromRss && !o.nsfw && S.archiveOk) return [];
   const src = (d.crosspost_parent_list && d.crosspost_parent_list[0]) || d;
   const base = { title: d.title, author: d.author, sub: d.subreddit, link: 'https://www.reddit.com' + d.permalink };
   const out = [];
   const add = (type, url, extra) => {
     if (!url || (type === 'video' && !o.videos)) return;
-    out.push({ ...base, type, url, ...extra });
+    out.push({ ...base, type, url: url.replace(/&amp;/g, '&'), ...extra });
   };
 
   // Galleries: originals live in media_metadata[id].s, ordered by gallery_data.items.
@@ -340,6 +373,14 @@ function extractMedia(post, o) {
   const imgur = url.match(/^https?:\/\/(?:m\.)?imgur\.com\/([A-Za-z0-9]{5,8})$/);
   if (imgur) { add('image', `https://i.imgur.com/${imgur[1]}.jpg`); return out; }
 
+  // RSS gives only the v.redd.it page, so try the usual stream names from best to worst.
+  const vid = url.match(/^https:\/\/v\.redd\.it\/(\w+)\/?$/);
+  if (vid) {
+    const [first, ...alts] = ['1080', '720', '480', '360'].map((q) => `https://v.redd.it/${vid[1]}/DASH_${q}.mp4`);
+    add('video', first, { alts });
+    return out;
+  }
+
   // External gif hosts (redgifs etc.) that Reddit transcoded.
   const pv = src.preview && src.preview.reddit_video_preview;
   if (pv && pv.fallback_url) { add('video', pv.fallback_url); return out; }
@@ -357,16 +398,18 @@ async function loadMore() {
     let added = 0;
     // Keep paging until something playable turns up (text-heavy subs can have empty pages).
     for (let page = 0; page < 5 && !added && !S.done; page++) {
-      const data = await fetchListing(S.opts);
-      for (const child of data.children) {
-        if (child.kind !== 't3' || S.seenPosts.has(child.data.name)) continue;
-        S.seenPosts.add(child.data.name);
-        const media = extractMedia(child, S.opts);
+      const { posts, after } = await fetchListing(S.opts);
+      let fresh = 0;
+      for (const post of posts) {
+        if (S.seenPosts.has(post.name)) continue;
+        S.seenPosts.add(post.name);
+        fresh++;
+        const media = extractMedia(post, S.opts);
         S.items.push(...media);
         added += media.length;
       }
-      S.after = data.after;
-      if (!data.after) S.done = true;
+      S.after = after;
+      if (!after || !fresh) S.done = true;
     }
     return added;
   })();
@@ -421,6 +464,7 @@ async function show(i, dir = 1) {
   };
   const fail = () => {
     if (token !== S.token) return;
+    if (item.alts && item.alts.length) { item.url = item.alts.shift(); show(i, dir); return; }
     S.items.splice(i, 1); // drop dead links (deleted imgur images, etc.)
     show(dir > 0 ? i : i - 1, dir);
   };
@@ -547,7 +591,6 @@ function readForm() {
     autoplay: $('autoplay').checked,
     videos: $('videos').checked,
     nsfw: $('nsfw').checked,
-    clientId: $('clientId').value.trim(),
   };
 }
 
@@ -567,9 +610,8 @@ async function start(o) {
   setError('');
   if (!o.sub) { setError('Enter a subreddit name.'); return; }
   $('sub').value = o.sub;
-  store.set('rs_clientId', o.clientId);
 
-  Object.assign(S, { opts: o, items: [], seenPosts: new Set(), i: 0, after: null, done: false, loading: null, current: null });
+  Object.assign(S, { opts: o, items: [], seenPosts: new Set(), i: 0, after: null, done: false, loading: null, current: null, source: null, archiveOk: false });
   S.interval = o.interval;
 
   $('go').disabled = true;
@@ -662,7 +704,6 @@ document.addEventListener('keydown', (e) => {
 /* ---- initial state from URL / storage ---- */
 (function init() {
   $('playBtn').innerHTML = ICON_PAUSE;
-  $('clientId').value = store.get('rs_clientId') || '';
   const p = new URLSearchParams(location.search);
   const check = (name, val) => { const el = document.querySelector(`input[name=${name}][value="${val}"]`); if (el) el.checked = true; };
   if (p.get('sort')) check('sort', p.get('sort'));
