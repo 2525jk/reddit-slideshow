@@ -14,7 +14,10 @@ Reddit blocks most direct requests from web pages, so the page tries these sourc
 
 1. **Reddit's JSON, straight from the browser.** Works on some networks.
 2. **Reddit's JSON through your proxy** (`worker.js`).
-3. **Reddit's RSS feed through your proxy.** Reddit rarely blocks RSS, and the feed keeps Reddit's own ranking and time ranges. RSS has no gallery, video or NSFW details, so the page looks each post up in the [Arctic Shift](https://arctic-shift.photon-reddit.com) archive, which mirrors Reddit's full post data and allows requests from web pages.
+3. **Reddit's RSS feed through your proxy.** The feed keeps Reddit's own ranking and time ranges.
+4. **The RSS feed converted by [feed2json.org](https://feed2json.org), through your proxy.** Reddit blocks Cloudflare's servers, including your worker, but not feed2json's, so this is usually the source that works.
+
+RSS has no gallery, video or NSFW details, so for sources 3 and 4 the page looks each post up in the [Arctic Shift](https://arctic-shift.photon-reddit.com) archive, which mirrors Reddit's full post data and allows requests from web pages.
 
 ## Proxy setup (one time, free, about 5 minutes)
 
@@ -28,7 +31,7 @@ Reddit blocks most direct requests from web pages, so the page tries these sourc
    ```
 6. Commit and push. GitHub Pages updates within a minute or two.
 
-The worker only fetches `reddit.com` URLs, and it caches each feed for 5 minutes so repeat visits don't run into Reddit's rate limits. The free plan allows 100,000 requests a day.
+The worker only fetches `reddit.com` and `feed2json.org` URLs, and it caches each feed for 5 minutes so repeat visits don't run into Reddit's rate limits. The free plan allows 100,000 requests a day.
 
 ## Deploy to GitHub Pages
 

@@ -1,10 +1,12 @@
-// Cloudflare Worker: a tiny CORS proxy that only fetches reddit.com pages.
+// Cloudflare Worker: a tiny CORS proxy that only fetches reddit.com and feed2json.org.
 // Reddit's feeds don't send the header that lets a web page read them, so the slideshow
-// fetches them through this worker instead. Deploy steps are in the README.
+// fetches them through this worker instead. Reddit blocks Cloudflare's own servers, so the
+// slideshow usually asks for feed2json.org's copy of the feed. Deploy steps are in the README.
 //
 // Usage: https://<your-worker>.workers.dev/?url=https://www.reddit.com/r/EarthPorn/top.rss?t=week
 
 const CORS = { 'Access-Control-Allow-Origin': '*' };
+const ALLOWED = /(^|\.)(reddit\.com|feed2json\.org)$/;
 
 export default {
   async fetch(request) {
@@ -13,10 +15,10 @@ export default {
     try {
       url = new URL(target);
     } catch {
-      return new Response('Pass a reddit.com URL as ?url=', { status: 400, headers: CORS });
+      return new Response('Pass a reddit.com or feed2json.org URL as ?url=', { status: 400, headers: CORS });
     }
-    if (url.protocol !== 'https:' || !/(^|\.)reddit\.com$/.test(url.hostname)) {
-      return new Response('Only reddit.com URLs are allowed', { status: 403, headers: CORS });
+    if (url.protocol !== 'https:' || !ALLOWED.test(url.hostname)) {
+      return new Response('Only reddit.com and feed2json.org URLs are allowed', { status: 403, headers: CORS });
     }
 
     const upstream = await fetch(url, {

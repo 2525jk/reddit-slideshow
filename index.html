@@ -209,7 +209,7 @@ const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>';
 const PRELOAD_AHEAD = 3;
 // Your Cloudflare Worker URL (see worker.js and the README). Leave empty to use only direct requests.
-const PROXY_URL = '';
+const PROXY_URL = 'https://redditproxy.2525jasonk.workers.dev/';
 
 const S = {
   opts: null, items: [], seenPosts: new Set(), i: 0, dir: 1,
@@ -247,12 +247,15 @@ const SOURCES = {
   direct: (o) => fetchJson(`https://www.reddit.com${listingPath(o).path}.json?${listingPath(o).qs}`, o),
   // 2. The same JSON through the proxy.
   proxyJson: (o) => fetchJson(viaProxy(`https://www.reddit.com${listingPath(o).path}.json?${listingPath(o).qs}`), o),
-  // 3. The RSS feed through the proxy (Reddit rarely blocks RSS), with media details from Arctic Shift.
+  // 3. The RSS feed through the proxy, with media details from Arctic Shift.
   proxyRss: (o) => fetchRss(o),
+  // 4. The RSS feed converted by feed2json.org, through the proxy. Reddit blocks Cloudflare's servers,
+  //    but not feed2json's, so this is usually the one that works.
+  feed2json: (o) => fetchFeed2json(o),
 };
 
 async function fetchListing(o) {
-  const order = PROXY_URL ? ['direct', 'proxyJson', 'proxyRss'] : ['direct'];
+  const order = PROXY_URL ? ['direct', 'proxyJson', 'proxyRss', 'feed2json'] : ['direct'];
   // Once a source works, keep using it for later pages.
   for (const name of order.slice(Math.max(0, order.indexOf(S.source)))) {
     try {
@@ -265,7 +268,7 @@ async function fetchListing(o) {
     }
   }
   throw new FriendlyError(PROXY_URL
-    ? 'Reddit blocked every way this page tried to load the feed. Wait a minute and try again.'
+    ? `Couldn't load r/${o.sub}. It may not exist, or Reddit is blocking requests right now. Wait a minute and try again.`
     : 'Reddit blocked this request. This site needs its free proxy set up first; see “Proxy setup” in the README.');
 }
 
@@ -283,33 +286,58 @@ async function fetchJson(url, o) {
   return { posts: json.data.children.filter((c) => c.kind === 't3').map((c) => c.data), after: json.data.after };
 }
 
+const rssUrl = (o) => `https://www.reddit.com${listingPath(o).path}.rss?${listingPath(o).qs}`;
+
 async function fetchRss(o) {
-  const { path, qs } = listingPath(o);
-  const res = await fetch(viaProxy(`https://www.reddit.com${path}.rss?${qs}`)).catch(() => { throw new Error('proxy unreachable'); });
-  checkStatus(res, o);
+  const res = await fetch(viaProxy(rssUrl(o))).catch(() => { throw new Error('proxy unreachable'); });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const xml = new DOMParser().parseFromString(await res.text(), 'application/xml');
-  if (!xml.querySelector('feed')) throw new FriendlyError(`r/${o.sub} doesn't seem to exist.`);
-  const posts = [...xml.getElementsByTagName('entry')].map(parseRssEntry);
-  await enrich(posts);
-  return { posts, after: posts.length ? posts[posts.length - 1].name : null };
+  if (!xml.querySelector('feed')) throw new Error('not a feed');
+  const posts = [...xml.getElementsByTagName('entry')].map((e) => {
+    const tag = (t) => e.getElementsByTagName(t)[0];
+    return rssPost({
+      name: tag('id').textContent,
+      title: tag('title').textContent,
+      author: tag('name') ? tag('name').textContent : '',
+      href: tag('link') ? tag('link').getAttribute('href') : '',
+      html: tag('content') ? tag('content').textContent : '',
+    });
+  });
+  return finishRss(posts);
 }
 
-function parseRssEntry(e) {
-  const tag = (t) => e.getElementsByTagName(t)[0];
-  const name = tag('id').textContent;
-  const content = new DOMParser().parseFromString(tag('content') ? tag('content').textContent : '', 'text/html');
+async function fetchFeed2json(o) {
+  const res = await fetch(viaProxy(`https://feed2json.org/convert?url=${encodeURIComponent(rssUrl(o))}`))
+    .catch(() => { throw new Error('proxy unreachable'); });
+  const json = res.ok ? await res.json().catch(() => null) : null;
+  if (!json || !Array.isArray(json.items)) throw new Error(json && json.err ? json.err : `HTTP ${res.status}`);
+  const posts = json.items.map((it) => rssPost({
+    name: it.guid, title: it.title, author: it.author ? it.author.name : '', href: it.url, html: it.content_html,
+  }));
+  return finishRss(posts);
+}
+
+// Turn one feed entry into the same shape as Reddit's post JSON (only the fields the slideshow uses).
+function rssPost({ name, title, author, href, html }) {
+  const content = new DOMParser().parseFromString(html || '', 'text/html');
   const link = [...content.querySelectorAll('a')].find((a) => a.textContent.trim() === '[link]');
-  const href = tag('link') && tag('link').getAttribute('href');
+  const permalink = href ? new URL(href).pathname : '';
+  const sub = permalink.match(/^\/r\/([^/]+)/);
   return {
     name,
     id: name.replace(/^t3_/, ''),
-    title: tag('title').textContent,
-    author: (tag('name') ? tag('name').textContent : '').replace(/^\/u\//, ''),
-    subreddit: tag('category') ? tag('category').getAttribute('term') : S.opts.sub,
-    permalink: href ? new URL(href).pathname : '',
+    title,
+    author: (author || '').trim().replace(/^\/u\//, ''),
+    subreddit: sub ? sub[1] : S.opts.sub,
+    permalink,
     url: link ? link.getAttribute('href') : '',
     fromRss: true,
   };
+}
+
+async function finishRss(posts) {
+  await enrich(posts);
+  return { posts, after: posts.length ? posts[posts.length - 1].name : null };
 }
 
 // RSS has no gallery, video or NSFW details, so look the posts up in the Arctic Shift archive
