@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Reddit Slideshow</title>
+<style>
+  :root {
+    --bg: #0e0f11;
+    --card: #17191c;
+    --line: #2a2d32;
+    --text: #e9eaec;
+    --muted: #8d9199;
+    --accent: #ff5722;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  button, input, select { font: inherit; color: inherit; }
+  a { color: inherit; }
+
+  /* ---------- Setup form ---------- */
+  #setup { min-height: 100%; display: grid; place-items: center; padding: 32px 16px; }
+  .card { width: 100%; max-width: 480px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; padding: 28px; }
+  h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: -0.01em; }
+  .sub { margin: 0 0 24px; color: var(--muted); }
+  .field { margin-bottom: 18px; }
+  .field > label, .legend { display: block; font-size: 13px; font-weight: 600; color: var(--muted);
+    margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .prefix { display: flex; align-items: center; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; padding-left: 12px; }
+  .prefix:focus-within { border-color: var(--accent); }
+  .prefix span { color: var(--muted); }
+  .prefix input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; padding: 11px 12px 11px 2px; }
+  input[type=text], input[type=number] { background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 12px; outline: 0; width: 100%; }
+  input[type=text]:focus, input[type=number]:focus { border-color: var(--accent); }
+
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; border: 0; padding: 0; margin: 0; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg label { flex: 1 1 auto; text-align: center; padding: 9px 12px; border: 1px solid var(--line);
+    border-radius: 10px; cursor: pointer; user-select: none; background: var(--bg); white-space: nowrap; }
+  .seg input:checked + label { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--bg)); }
+  .seg input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .seg.disabled { opacity: 0.4; }
+  .seg.disabled label { cursor: not-allowed; }
+  .hint { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+  .row { display: flex; gap: 18px; flex-wrap: wrap; align-items: end; }
+  .row .field { flex: 1 1 120px; }
+  .check { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px 0; }
+  .check input { accent-color: var(--accent); width: 16px; height: 16px; }
+
+  .go { width: 100%; padding: 13px; border: 0; border-radius: 12px; background: var(--accent);
+    color: #fff; font-weight: 650; font-size: 16px; cursor: pointer; margin-top: 6px; }
+  .go:disabled { opacity: 0.6; cursor: progress; }
+  #error { display: none; margin-top: 14px; padding: 12px 14px; border-radius: 10px;
+    background: #3a1714; border: 1px solid #6b2a22; color: #ffd9d2; font-size: 14px; }
+  #error.on { display: block; }
+
+  details { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 14px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  details ol { padding-left: 20px; color: var(--muted); font-size: 14px; }
+  details code { background: var(--bg); padding: 1px 5px; border-radius: 5px; }
+  .keys { margin-top: 18px; font-size: 13px; color: var(--muted); }
+  kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px;
+    font: 12px ui-monospace, monospace; }
+
+  /* ---------- Slideshow ---------- */
+  #show { position: fixed; inset: 0; background: #000; display: none; overflow: hidden; }
+  #show.on { display: block; }
+  #show:not(.ui) { cursor: none; }
+  #stage { position: absolute; inset: 0; }
+  .media { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+    opacity: 0; transition: opacity 0.35s ease; }
+  .media.in { opacity: 1; }
+  #spinner { position: absolute; left: 50%; top: 50%; width: 36px; height: 36px; margin: -18px;
+    border: 3px solid #fff3; border-top-color: #fff; border-radius: 50%;
+    animation: spin 0.8s linear infinite; display: none; }
+  #spinner.on { display: block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .overlay { position: absolute; left: 0; right: 0; transition: opacity 0.3s ease; opacity: 0; pointer-events: none; }
+  #show.ui .overlay { opacity: 1; pointer-events: auto; }
+  #top { top: 0; padding: calc(env(safe-area-inset-top, 0px) + 16px) 20px 40px;
+    background: linear-gradient(#000c, #0000); display: flex; gap: 16px; align-items: flex-start; }
+  #caption { flex: 1; min-width: 0; }
+  #title { font-size: 17px; font-weight: 600; text-decoration: none; display: block;
+    text-shadow: 0 1px 3px #000; overflow-wrap: anywhere; }
+  #title:hover { text-decoration: underline; }
+  #meta { color: #c9cbd0; font-size: 13px; margin-top: 2px; }
+  #bottom { bottom: 0; padding: 40px 16px calc(env(safe-area-inset-bottom, 0px) + 14px);
+    background: linear-gradient(#0000, #000c); display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .btn { background: #ffffff1a; border: 0; border-radius: 999px; width: 44px; height: 44px;
+    display: grid; place-items: center; cursor: pointer; flex: none; }
+  .btn:hover { background: #ffffff33; }
+  .btn svg { width: 20px; height: 20px; fill: currentColor; }
+  #counter { min-width: 84px; text-align: center; font-variant-numeric: tabular-nums; font-size: 14px; color: #c9cbd0; }
+  #speed { background: #ffffff1a; border: 0; border-radius: 999px; height: 44px; padding: 0 12px; cursor: pointer; }
+  #speed option { background: #222; }
+  .spacer { flex: 1; }
+  #progress { position: absolute; left: 0; bottom: 0; height: 3px; width: 0; background: var(--accent); z-index: 2; }
+  #toast { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #000b;
+    padding: 12px 18px; border-radius: 12px; display: none; max-width: calc(100% - 32px); text-align: center; }
+  #toast.on { display: block; }
+  @media (max-width: 520px) {
+    #bottom { gap: 4px; }
+    #speed { display: none; }
+    #counter { min-width: 64px; }
+  }
+</style>
+</head>
+<body>
+
+<main id="setup">
+  <form class="card" id="form" autocomplete="off">
+    <h1>Reddit Slideshow</h1>
+    <p class="sub">Full-resolution images, galleries and videos from any subreddit.</p>
+
+    <div class="field">
+      <label for="sub">Subreddit</label>
+      <div class="prefix"><span>r/</span><input id="sub" name="sub" type="text" placeholder="EarthPorn" required spellcheck="false"></div>
+      <div class="hint">Combine several with <code>+</code>, like <code>EarthPorn+SkyPorn</code>.</div>
+    </div>
+
+    <div class="field">
+      <span class="legend">Feed</span>
+      <fieldset class="seg" id="sortSeg">
+        <input type="radio" name="sort" id="s-best" value="best"><label for="s-best">Best</label>
+        <input type="radio" name="sort" id="s-top" value="top" checked><label for="s-top">Top</label>
+        <input type="radio" name="sort" id="s-rising" value="rising"><label for="s-rising">Rising</label>
+      </fieldset>
+    </div>
+
+    <div class="field">
+      <span class="legend">Time range</span>
+      <fieldset class="seg" id="timeSeg">
+        <input type="radio" name="t" id="t-all" value="all"><label for="t-all">All time</label>
+        <input type="radio" name="t" id="t-year" value="year"><label for="t-year">1 year</label>
+        <input type="radio" name="t" id="t-month" value="month"><label for="t-month">1 month</label>
+        <input type="radio" name="t" id="t-week" value="week" checked><label for="t-week">1 week</label>
+      </fieldset>
+      <div class="hint" id="timeHint" hidden>Time range only applies to Top.</div>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label for="interval">Seconds per slide</label>
+        <input id="interval" name="interval" type="number" min="1" max="120" step="1" value="6">
+      </div>
+      <div class="field">
+        <label class="check"><input type="checkbox" id="autoplay" checked> Autoplay</label>
+      </div>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="videos" checked> Include videos</label>
+      <label class="check"><input type="checkbox" id="nsfw"> Include NSFW</label>
+    </div>
+
+    <button class="go" id="go" type="submit">Start slideshow</button>
+    <div id="error" role="alert"></div>
+
+    <details id="apiBox">
+      <summary>Reddit API key (if loading fails)</summary>
+      <p class="hint">Reddit sometimes blocks requests from browsers that aren't logged in. A free app ID gets around that:</p>
+      <ol>
+        <li>Open <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> and click <em>create another app</em>.</li>
+        <li>Pick <strong>installed app</strong>. Enter any name, and use <code>http://localhost</code> as the redirect URI.</li>
+        <li>Paste the ID shown under the app name below.</li>
+      </ol>
+      <input id="clientId" type="text" placeholder="Client ID (e.g. a1B2c3D4e5F6g7)" spellcheck="false">
+      <div class="hint">Saved only in this browser. An installed-app ID isn't a secret.</div>
+    </details>
+
+    <div class="keys">
+      <kbd>←</kbd> <kbd>→</kbd> navigate · <kbd>Space</kbd> play/pause · <kbd>F</kbd> fullscreen · <kbd>Esc</kbd> exit · swipe on touch
+    </div>
+  </form>
+</main>
+
+<section id="show" aria-label="Slideshow">
+  <div id="stage"></div>
+  <div id="spinner"></div>
+  <div id="toast"></div>
+
+  <div class="overlay" id="top">
+    <div id="caption">
+      <a id="title" target="_blank" rel="noopener"></a>
+      <div id="meta"></div>
+    </div>
+    <button class="btn" id="closeBtn" title="Exit (Esc)" aria-label="Exit">
+      <svg viewBox="0 0 24 24"><path d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7l1.4-1.4 6.3 6.3 6.3-6.3z"/></svg>
+    </button>
+  </div>
+
+  <div class="overlay" id="bottom">
+    <select id="speed" title="Seconds per slide" aria-label="Seconds per slide">
+      <option value="3">3s</option><option value="5">5s</option><option value="6">6s</option>
+      <option value="8">8s</option><option value="10">10s</option><option value="15">15s</option><option value="30">30s</option>
+    </select>
+    <span class="spacer"></span>
+    <button class="btn" id="prevBtn" title="Previous (←)" aria-label="Previous">
+      <svg viewBox="0 0 24 24"><path d="M15.4 4.6 8 12l7.4 7.4-1.4 1.4L5.2 12 14 3.2z"/></svg>
+    </button>
+    <button class="btn" id="playBtn" title="Play/pause (Space)" aria-label="Play or pause"></button>
+    <button class="btn" id="nextBtn" title="Next (→)" aria-label="Next">
+      <svg viewBox="0 0 24 24"><path d="M8.6 4.6 16 12l-7.4 7.4 1.4 1.4 8.8-8.8L10 3.2z"/></svg>
+    </button>
+    <span id="counter"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="fsBtn" title="Fullscreen (F)" aria-label="Fullscreen">
+      <svg viewBox="0 0 24 24"><path d="M3 3h7v2H5v5H3zm11 0h7v7h-2V5h-5zM3 14h2v5h5v2H3zm16 0h2v7h-7v-2h5z"/></svg>
+    </button>
+  </div>
+  <div id="progress"></div>
+</section>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg>';
+const ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>';
+const PRELOAD_AHEAD = 3;
+
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+
+const S = {
+  opts: null, items: [], seenPosts: new Set(), i: 0, dir: 1,
+  after: null, done: false, loading: null,
+  playing: true, interval: 6, timer: null, token: 0, current: null,
+};
+
+/* ================= Reddit fetching ================= */
+
+class FriendlyError extends Error {}
+
+function cleanSub(raw) {
+  return raw.trim()
+    .replace(/^https?:\/\/(www\.|old\.|new\.)?reddit\.com/i, '')
+    .replace(/^\/?r\//i, '')
+    .split(/[/?#]/)[0]
+    .replace(/[^A-Za-z0-9_+]/g, '');
+}
+
+function listingPath(o) {
+  // Subreddit listings have no separate "best" endpoint; Reddit's default (hot) is the same ranking.
+  const sort = o.sort === 'best' ? 'hot' : o.sort;
+  const qs = new URLSearchParams({ limit: '100', raw_json: '1' });
+  if (sort === 'top') qs.set('t', o.t);
+  if (S.after) qs.set('after', S.after);
+  return { path: `/r/${o.sub}/${sort}`, qs };
+}
+
+async function getToken(clientId) {
+  try {
+    const c = JSON.parse(sessionStorage.getItem('rs_token') || 'null');
+    if (c && c.id === clientId && c.exp > Date.now() + 60000) return c.token;
+  } catch {}
+  const res = await fetch('https://www.reddit.com/api/v1/access_token', {
+    method: 'POST',
+    headers: { Authorization: 'Basic ' + btoa(clientId + ':') },
+    body: new URLSearchParams({
+      grant_type: 'https://oauth.reddit.com/grants/installed_client',
+      device_id: 'DO_NOT_TRACK_THIS_DEVICE',
+    }),
+  }).catch(() => null);
+  const data = res && res.ok ? await res.json().catch(() => null) : null;
+  if (!data || !data.access_token) {
+    throw new FriendlyError('Reddit rejected that client ID. Check that the app type is “installed app” and the ID is copied exactly.');
+  }
+  try {
+    sessionStorage.setItem('rs_token', JSON.stringify({ id: clientId, token: data.access_token, exp: Date.now() + data.expires_in * 1000 }));
+  } catch {}
+  return data.access_token;
+}
+
+async function fetchListing(o) {
+  const { path, qs } = listingPath(o);
+  let res;
+  if (o.clientId) {
+    const token = await getToken(o.clientId);
+    res = await fetch(`https://oauth.reddit.com${path}?${qs}`, { headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
+  } else {
+    res = await fetch(`https://www.reddit.com${path}.json?${qs}`).catch(() => null);
+  }
+  if (!res) {
+    if (!o.clientId) {
+      $('apiBox').open = true;
+      throw new FriendlyError('Reddit blocked this request, which often happens to browsers that aren\'t logged in. Add a free client ID under “Reddit API key” below and try again.');
+    }
+    throw new FriendlyError('Couldn\'t reach Reddit. Check your connection and try again.');
+  }
+  if (res.status === 404) throw new FriendlyError(`r/${o.sub} doesn't exist or has been banned.`);
+  if (res.status === 403) throw new FriendlyError(`r/${o.sub} is private or quarantined.`);
+  if (res.status === 429) throw new FriendlyError('Reddit is rate-limiting requests. Wait a minute and try again.');
+  if (!res.ok) throw new FriendlyError(`Reddit returned an error (${res.status}).`);
+  const json = await res.json().catch(() => null);
+  if (!json || json.kind !== 'Listing') throw new FriendlyError(`r/${o.sub} doesn't seem to exist.`);
+  return json.data;
+}
+
+/* ================= Media extraction ================= */
+
+function extractMedia(post, o) {
+  const d = post.data;
+  if (d.stickied || (d.over_18 && !o.nsfw)) return [];
+  const src = (d.crosspost_parent_list && d.crosspost_parent_list[0]) || d;
+  const base = { title: d.title, author: d.author, sub: d.subreddit, link: 'https://www.reddit.com' + d.permalink };
+  const out = [];
+  const add = (type, url, extra) => {
+    if (!url || (type === 'video' && !o.videos)) return;
+    out.push({ ...base, type, url, ...extra });
+  };
+
+  // Galleries: originals live in media_metadata[id].s, ordered by gallery_data.items.
+  if (src.is_gallery && src.gallery_data && src.media_metadata) {
+    const items = src.gallery_data.items;
+    items.forEach((it, k) => {
+      const m = src.media_metadata[it.media_id];
+      if (!m || m.status !== 'valid' || !m.s) return;
+      const extra = { gallery: [k + 1, items.length], caption: it.caption };
+      if (m.e === 'AnimatedImage') m.s.mp4 ? add('video', m.s.mp4, extra) : add('image', m.s.gif, extra);
+      else add('image', m.s.u, extra);
+    });
+    return out;
+  }
+
+  // Reddit-hosted video (fallback_url is the highest-quality stream with audio removed).
+  const rv = (src.secure_media && src.secure_media.reddit_video) || (src.media && src.media.reddit_video);
+  if (rv) { add('video', rv.fallback_url); return out; }
+
+  const url = src.url_overridden_by_dest || src.url || '';
+  if (/\.(jpe?g|png|webp|gif)(\?.*)?$/i.test(url)) { add('image', url); return out; }
+  if (/\.gifv(\?.*)?$/i.test(url)) { add('video', url.replace(/\.gifv/i, '.mp4')); return out; }
+  const imgur = url.match(/^https?:\/\/(?:m\.)?imgur\.com\/([A-Za-z0-9]{5,8})$/);
+  if (imgur) { add('image', `https://i.imgur.com/${imgur[1]}.jpg`); return out; }
+
+  // External gif hosts (redgifs etc.) that Reddit transcoded.
+  const pv = src.preview && src.preview.reddit_video_preview;
+  if (pv && pv.fallback_url) { add('video', pv.fallback_url); return out; }
+
+  // Image posts from other hosts or imgur albums: Reddit's copy of the original.
+  const ps = src.preview && src.preview.images && src.preview.images[0];
+  if (ps && (src.post_hint === 'image' || /imgur\.com/.test(src.domain || ''))) add('image', ps.source.url);
+  return out;
+}
+
+async function loadMore() {
+  if (S.done) return 0;
+  if (S.loading) return S.loading;
+  S.loading = (async () => {
+    let added = 0;
+    // Keep paging until something playable turns up (text-heavy subs can have empty pages).
+    for (let page = 0; page < 5 && !added && !S.done; page++) {
+      const data = await fetchListing(S.opts);
+      for (const child of data.children) {
+        if (child.kind !== 't3' || S.seenPosts.has(child.data.name)) continue;
+        S.seenPosts.add(child.data.name);
+        const media = extractMedia(child, S.opts);
+        S.items.push(...media);
+        added += media.length;
+      }
+      S.after = data.after;
+      if (!data.after) S.done = true;
+    }
+    return added;
+  })();
+  try { return await S.loading; } finally { S.loading = null; }
+}
+
+/* ================= Slideshow ================= */
+
+function makeEl(item) {
+  let el;
+  if (item.type === 'video') {
+    el = document.createElement('video');
+    el.muted = true; el.playsInline = true; el.autoplay = true;
+    el.loop = !S.playing;
+    el.preload = 'auto';
+  } else {
+    el = document.createElement('img');
+    el.decoding = 'async';
+    el.alt = item.title;
+  }
+  el.className = 'media';
+  el.src = item.url;
+  return el;
+}
+
+async function show(i, dir = 1) {
+  S.dir = dir;
+  if (i >= S.items.length) {
+    if (!S.done) {
+      $('spinner').classList.add('on');
+      try { await loadMore(); } catch (e) { toast(e.message); }
+    }
+    if (i >= S.items.length) i = 0; // reached the very end: loop
+  }
+  if (i < 0) i = S.items.length - 1;
+  if (!S.items.length) { $('spinner').classList.remove('on'); toast('No images or videos found in this feed.'); return; }
+
+  S.i = i;
+  const token = ++S.token;
+  const item = S.items[i];
+  clearTimer();
+  updateCaption(item);
+  $('spinner').classList.add('on');
+
+  const el = makeEl(item);
+  const ready = () => {
+    if (token !== S.token) return;
+    $('spinner').classList.remove('on');
+    swap(el);
+    S.current = { item, el };
+    schedule();
+  };
+  const fail = () => {
+    if (token !== S.token) return;
+    S.items.splice(i, 1); // drop dead links (deleted imgur images, etc.)
+    show(dir > 0 ? i : i - 1, dir);
+  };
+  if (item.type === 'video') {
+    el.addEventListener('loadeddata', ready, { once: true });
+    el.addEventListener('error', fail, { once: true });
+    el.addEventListener('ended', () => { if (token === S.token && S.playing) next(); });
+    el.addEventListener('timeupdate', () => {
+      if (token === S.token && S.playing && el.duration) setProgress(el.currentTime / el.duration);
+    });
+  } else {
+    el.addEventListener('load', ready, { once: true });
+    el.addEventListener('error', fail, { once: true });
+  }
+  $('stage').appendChild(el);
+
+  preload(i);
+  if (!S.done && S.items.length - i < 10) loadMore().catch(() => {});
+}
+
+function swap(el) {
+  for (const old of [...$('stage').children]) {
+    if (old === el) continue;
+    old.classList.remove('in');
+    if (old.tagName === 'VIDEO') old.pause();
+    setTimeout(() => old.remove(), 400);
+  }
+  requestAnimationFrame(() => el.classList.add('in'));
+}
+
+function preload(i) {
+  for (let k = 1; k <= PRELOAD_AHEAD; k++) {
+    const it = S.items[i + k];
+    if (it && it.type === 'image' && !it.preloaded) { new Image().src = it.url; it.preloaded = true; }
+  }
+}
+
+function updateCaption(item) {
+  const title = $('title');
+  title.textContent = item.title;
+  title.href = item.link;
+  const bits = [`r/${item.sub}`, `u/${item.author}`];
+  if (item.gallery) bits.push(`${item.gallery[0]} of ${item.gallery[1]}`);
+  if (item.type === 'video') bits.push('video (muted)');
+  $('meta').textContent = bits.join(' · ') + (item.caption ? ` · ${item.caption}` : '');
+  $('counter').textContent = `${S.i + 1} / ${S.items.length}${S.done ? '' : '+'}`;
+}
+
+function clearTimer() {
+  clearTimeout(S.timer);
+  S.timer = null;
+  setProgress(0, 0);
+}
+
+function setProgress(frac, durationSec) {
+  const bar = $('progress');
+  if (durationSec !== undefined) {
+    bar.style.transition = 'none';
+    bar.style.width = '0';
+    void bar.offsetWidth;
+    if (durationSec > 0) {
+      bar.style.transition = `width ${durationSec}s linear`;
+      bar.style.width = '100%';
+    }
+  } else {
+    bar.style.transition = 'none';
+    bar.style.width = `${frac * 100}%`;
+  }
+}
+
+function schedule() {
+  clearTimer();
+  if (!S.playing || !S.current) return;
+  if (S.current.item.type === 'video') return; // videos advance on "ended"
+  setProgress(0, S.interval);
+  S.timer = setTimeout(next, S.interval * 1000);
+}
+
+function next() { show(S.i + 1, 1); }
+function prev() { show(S.i - 1, -1); }
+
+function setPlaying(on) {
+  S.playing = on;
+  $('playBtn').innerHTML = on ? ICON_PAUSE : ICON_PLAY;
+  const v = S.current && S.current.el.tagName === 'VIDEO' ? S.current.el : null;
+  if (v) { v.loop = !on; if (v.paused) v.play().catch(() => {}); }
+  if (on) schedule(); else clearTimer();
+}
+
+function toast(msg, ms = 3500) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('on');
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => t.classList.remove('on'), ms);
+}
+
+function toggleFullscreen() {
+  const show = $('show');
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (show.requestFullscreen) show.requestFullscreen().catch(() => {});
+  else if (show.webkitRequestFullscreen) show.webkitRequestFullscreen();
+}
+
+/* ---- auto-hiding controls ---- */
+let idleTimer;
+function wakeUI() {
+  const show = $('show');
+  show.classList.add('ui');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (!show.querySelector('.overlay:hover, select:focus')) show.classList.remove('ui');
+  }, 2500);
+}
+
+/* ================= Wiring ================= */
+
+function readForm() {
+  return {
+    sub: cleanSub($('sub').value),
+    sort: document.querySelector('input[name=sort]:checked').value,
+    t: document.querySelector('input[name=t]:checked').value,
+    interval: Math.min(120, Math.max(1, parseInt($('interval').value, 10) || 6)),
+    autoplay: $('autoplay').checked,
+    videos: $('videos').checked,
+    nsfw: $('nsfw').checked,
+    clientId: $('clientId').value.trim(),
+  };
+}
+
+function syncTimeState() {
+  const isTop = document.querySelector('input[name=sort]:checked').value === 'top';
+  $('timeSeg').classList.toggle('disabled', !isTop);
+  $('timeSeg').disabled = !isTop;
+  $('timeHint').hidden = isTop;
+}
+
+function setError(msg) {
+  $('error').textContent = msg || '';
+  $('error').classList.toggle('on', !!msg);
+}
+
+async function start(o) {
+  setError('');
+  if (!o.sub) { setError('Enter a subreddit name.'); return; }
+  $('sub').value = o.sub;
+  store.set('rs_clientId', o.clientId);
+
+  Object.assign(S, { opts: o, items: [], seenPosts: new Set(), i: 0, after: null, done: false, loading: null, current: null });
+  S.interval = o.interval;
+
+  $('go').disabled = true;
+  $('go').textContent = 'Loading…';
+  try {
+    await loadMore();
+    if (!S.items.length) throw new FriendlyError(`No images${o.videos ? ' or videos' : ''} found in r/${o.sub} for that feed.`);
+  } catch (e) {
+    setError(e instanceof FriendlyError ? e.message : 'Something went wrong loading that feed.');
+    console.error(e);
+    return;
+  } finally {
+    $('go').disabled = false;
+    $('go').textContent = 'Start slideshow';
+  }
+
+  // Put the settings in the URL so the slideshow can be bookmarked or shared.
+  const p = new URLSearchParams({ r: o.sub, sort: o.sort, interval: o.interval });
+  if (o.sort === 'top') p.set('t', o.t);
+  if (!o.autoplay) p.set('autoplay', '0');
+  if (!o.videos) p.set('videos', '0');
+  if (o.nsfw) p.set('nsfw', '1');
+  history.replaceState(null, '', `?${p}`);
+
+  const speed = $('speed');
+  if (![...speed.options].some((op) => +op.value === o.interval)) speed.add(new Option(`${o.interval}s`, o.interval));
+  speed.value = String(o.interval);
+
+  $('setup').hidden = true;
+  $('show').classList.add('on');
+  document.title = `r/${o.sub} · Reddit Slideshow`;
+  setPlaying(o.autoplay);
+  wakeUI();
+  show(0, 1);
+}
+
+function stop() {
+  S.token++;
+  clearTimer();
+  S.current = null;
+  if (document.fullscreenElement) document.exitFullscreen();
+  $('stage').replaceChildren();
+  $('spinner').classList.remove('on');
+  $('show').classList.remove('on');
+  $('setup').hidden = false;
+  document.title = 'Reddit Slideshow';
+}
+
+$('form').addEventListener('submit', (e) => { e.preventDefault(); start(readForm()); });
+$('sortSeg').addEventListener('change', syncTimeState);
+$('closeBtn').onclick = stop;
+$('prevBtn').onclick = prev;
+$('nextBtn').onclick = next;
+$('playBtn').onclick = () => setPlaying(!S.playing);
+$('fsBtn').onclick = toggleFullscreen;
+$('speed').onchange = (e) => { S.interval = +e.target.value; schedule(); };
+
+$('stage').addEventListener('click', (e) => {
+  if (!$('show').classList.contains('ui') && matchMedia('(hover: none)').matches) { wakeUI(); return; }
+  const x = e.clientX / window.innerWidth;
+  if (x < 0.3) prev(); else if (x > 0.7) next(); else setPlaying(!S.playing);
+  wakeUI();
+});
+$('show').addEventListener('mousemove', wakeUI);
+
+let touchX = null, touchY = null;
+$('show').addEventListener('touchstart', (e) => { touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; }, { passive: true });
+$('show').addEventListener('touchend', (e) => {
+  if (touchX === null) return;
+  const dx = e.changedTouches[0].clientX - touchX;
+  const dy = e.changedTouches[0].clientY - touchY;
+  touchX = null;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) { e.preventDefault(); dx < 0 ? next() : prev(); }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (!$('show').classList.contains('on') || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.tagName === 'SELECT') return;
+  switch (e.key) {
+    case 'ArrowRight': case 'l': next(); break;
+    case 'ArrowLeft': case 'h': prev(); break;
+    case ' ': case 'k': e.preventDefault(); setPlaying(!S.playing); break;
+    case 'f': case 'F': toggleFullscreen(); break;
+    case 'Escape': if (!document.fullscreenElement) stop(); break;
+    default: return;
+  }
+  wakeUI();
+});
+
+/* ---- initial state from URL / storage ---- */
+(function init() {
+  $('playBtn').innerHTML = ICON_PAUSE;
+  $('clientId').value = store.get('rs_clientId') || '';
+  const p = new URLSearchParams(location.search);
+  const check = (name, val) => { const el = document.querySelector(`input[name=${name}][value="${val}"]`); if (el) el.checked = true; };
+  if (p.get('sort')) check('sort', p.get('sort'));
+  if (p.get('t')) check('t', p.get('t'));
+  if (p.get('interval')) $('interval').value = p.get('interval');
+  if (p.get('autoplay') === '0') $('autoplay').checked = false;
+  if (p.get('videos') === '0') $('videos').checked = false;
+  if (p.get('nsfw') === '1') $('nsfw').checked = true;
+  syncTimeState();
+  if (p.get('r')) { $('sub').value = p.get('r'); start(readForm()); }
+  else $('sub').focus();
+})();
+</script>
+</body>
+</html>
